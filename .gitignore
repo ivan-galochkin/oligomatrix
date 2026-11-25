@@ -1,0 +1,7 @@
+/target/
+/dist/
+/.venv/
+/.idea/
+.DS_Store
+__pycache__/
+*.py[cod]

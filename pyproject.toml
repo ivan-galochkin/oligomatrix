@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "oligomatrix"
+dynamic = ["version"]
+description = "Parallel minimum-free-energy matrices for pairs of nucleotide fragments"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.23"]
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "oligomatrix"
+features = ["python"]
+include = [{ path = "NOTICE-ViennaRNA.txt", format = "wheel" }]

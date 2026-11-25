@@ -1,0 +1,5 @@
+* text=auto
+*.par -text
+*.rs text eol=lf
+*.yml text eol=lf
+*.py text eol=lf

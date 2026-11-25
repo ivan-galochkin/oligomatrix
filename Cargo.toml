@@ -1,0 +1,19 @@
+[package]
+name = "oligomatrix"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Parallel minimum-free-energy matrices for pairs of nucleotide fragments"
+readme = "README.md"
+include = ["/src/**", "/data/*.par", "/Cargo.lock", "/pyproject.toml", "/README.md", "/NOTICE-ViennaRNA.txt", "/scripts/*.py"]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+python = ["dep:pyo3", "dep:numpy"]
+
+[dependencies]
+rayon = "1.11"
+numpy = { version = "0.27", optional = true }
+pyo3 = { version = "0.27", optional = true, features = ["abi3-py310", "generate-import-lib"] }
