@@ -195,6 +195,13 @@ def check_model(model, temperature, batches, extended):
 
 
 def check_api():
+    for call in (lambda: EnergyCalculator(backend="bad"),
+                 lambda: energy_matrix(["A"], ["T"], backend="bad")):
+        try:
+            call()
+        except ValueError:
+            continue
+        raise AssertionError("Expected ValueError for an unknown backend")
     calc = EnergyCalculator()
     for fn in (calc.matrix, energy_matrix):
         for rows, columns in (([], []), ([], ["A", "C"]), (["G", "T"], [])):
@@ -217,13 +224,13 @@ def check_api():
                      "turner2004", 37.0, f"{fn.__name__} defaults")
 
 
-def check_concurrent():
+def check_concurrent(backend="cpu"):
     rows, columns = random_batches(73)[0]
     jobs = []
     for temperature in (16.25, 48.75):
         for model in MODELS:
             expected = reference(rows, columns, model_details(model, temperature))
-            calc = EnergyCalculator(model=model, temperature=temperature, threads=2)
+            calc = EnergyCalculator(model=model, temperature=temperature, threads=2, backend=backend)
             jobs.append((calc, expected, model, temperature))
     count = 0
     with ThreadPoolExecutor(len(jobs)) as pool:

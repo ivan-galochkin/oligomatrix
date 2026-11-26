@@ -24,16 +24,26 @@ struct EnergyCalculator {
 #[pymethods]
 impl EnergyCalculator {
     #[new]
-    #[pyo3(signature = (*, temperature=37.0, min_loop_size=0, model="turner2004", threads=0))]
-    fn new(temperature: f64, min_loop_size: i64, model: &str, threads: u16) -> PyResult<Self> {
+    #[pyo3(signature = (*, temperature=37.0, min_loop_size=0, model="turner2004", threads=0, backend="cpu"))]
+    fn new(
+        py: Python<'_>,
+        temperature: f64,
+        min_loop_size: i64,
+        model: &str,
+        threads: u16,
+        backend: &str,
+    ) -> PyResult<Self> {
         if min_loop_size != 0 {
             return Err(PyValueError::new_err(
                 "This implementation supports min_loop_size=0",
             ));
         }
-        Ok(Self {
-            inner: MatrixCalculator::new(temperature, model.parse()?, threads.into())?,
-        })
+        let model = model.parse()?;
+        let backend = backend.parse()?;
+        let inner = py.detach(|| {
+            MatrixCalculator::with_backend(temperature, model, threads.into(), backend)
+        })?;
+        Ok(Self { inner })
     }
 
     /// Return an independent row-major float32 matrix of minimum free energies (kcal/mol).
@@ -52,7 +62,8 @@ impl EnergyCalculator {
 
 /// Build one matrix. Reuse EnergyCalculator to cache pairs across calls.
 #[pyfunction]
-#[pyo3(signature = (rows, columns, *, temperature=37.0, min_loop_size=0, model="turner2004", threads=0))]
+#[pyo3(signature = (rows, columns, *, temperature=37.0, min_loop_size=0, model="turner2004", threads=0, backend="cpu"))]
+#[allow(clippy::too_many_arguments)]
 fn energy_matrix<'py>(
     py: Python<'py>,
     rows: Vec<String>,
@@ -61,8 +72,10 @@ fn energy_matrix<'py>(
     min_loop_size: i64,
     model: &str,
     threads: u16,
+    backend: &str,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
-    EnergyCalculator::new(temperature, min_loop_size, model, threads)?.matrix(py, rows, columns)
+    EnergyCalculator::new(py, temperature, min_loop_size, model, threads, backend)?
+        .matrix(py, rows, columns)
 }
 
 #[pymodule]

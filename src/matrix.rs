@@ -1,15 +1,38 @@
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use rayon::prelude::*;
 
+use crate::cuda::CudaFold;
 use crate::params::Params;
 use crate::workers::Workers;
 use crate::{MatrixError, Model, folding};
 
 const BATCH_SIZE: usize = 512;
+const CUDA_BATCH_SIZE: usize = 2048;
 const MAX_PAIR_LENGTH: usize = 32_700;
 type Pair = (usize, usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Backend {
+    Cpu,
+    Cuda,
+}
+
+impl FromStr for Backend {
+    type Err = MatrixError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "cpu" => Ok(Self::Cpu),
+            "cuda" => Ok(Self::Cuda),
+            _ => Err(MatrixError::InvalidInput(
+                "Expected backend='cpu' or 'cuda'",
+            )),
+        }
+    }
+}
 
 /// An owned, row-major matrix in kcal/mol.
 pub struct EnergyMatrix {
@@ -59,17 +82,18 @@ impl<'a> Axis<'a> {
     }
 }
 
-struct Job<'a> {
+pub(crate) struct Job<'a> {
     pair: Pair,
-    row: &'a [u8],
-    column: &'a [u8],
-    column_energy: f32,
+    pub(crate) row: &'a [u8],
+    pub(crate) column: &'a [u8],
+    pub(crate) column_energy: f32,
 }
 
 /// Caches ordered pairs for one temperature and one parameter model.
 pub struct MatrixCalculator {
     params: Arc<Params>,
     workers: Workers,
+    cuda: Option<CudaFold>,
     ids: HashMap<String, usize>,
     monomers: HashMap<usize, f32>,
     pairs: HashMap<Pair, f32>,
@@ -78,8 +102,23 @@ pub struct MatrixCalculator {
 impl MatrixCalculator {
     /// A thread limit of zero selects up to eight available logical CPUs.
     pub fn new(temperature: f64, model: Model, threads: usize) -> Result<Self, MatrixError> {
+        Self::with_backend(temperature, model, threads, Backend::Cpu)
+    }
+
+    pub fn with_backend(
+        temperature: f64,
+        model: Model,
+        threads: usize,
+        backend: Backend,
+    ) -> Result<Self, MatrixError> {
+        let params = Params::shared(model, temperature)?;
+        let cuda = match backend {
+            Backend::Cpu => None,
+            Backend::Cuda => Some(CudaFold::new(&params)?),
+        };
         Ok(Self {
-            params: Params::shared(model, temperature)?,
+            params,
+            cuda,
             workers: Workers::new(threads),
             ids: HashMap::new(),
             monomers: HashMap::new(),
@@ -110,6 +149,11 @@ impl MatrixCalculator {
                 "Combined fragment length exceeds 32700",
             ));
         }
+        if self.cuda.is_some() && longest_row + longest_column > crate::cuda::MAX_BASES {
+            return Err(MatrixError::InvalidInput(
+                "CUDA supports a combined fragment length up to 128; use backend='cpu' for longer pairs",
+            ));
+        }
         let mut values = Vec::new();
         values
             .try_reserve_exact(cells)
@@ -136,6 +180,11 @@ impl MatrixCalculator {
             })
             .collect();
         let mut jobs = Vec::new();
+        let batch_size = if self.cuda.is_some() {
+            CUDA_BATCH_SIZE
+        } else {
+            BATCH_SIZE
+        };
         for &(i, row) in &rows.unique {
             for &(j, column, column_energy) in &columns {
                 if !self.pairs.contains_key(&(i, j)) {
@@ -145,7 +194,7 @@ impl MatrixCalculator {
                         column,
                         column_energy,
                     });
-                    if jobs.len() == BATCH_SIZE {
+                    if jobs.len() == batch_size {
                         self.fold_batch(&jobs)?;
                         jobs.clear();
                     }
@@ -156,6 +205,15 @@ impl MatrixCalculator {
     }
 
     fn fold_batch(&mut self, jobs: &[Job<'_>]) -> Result<(), MatrixError> {
+        if jobs.is_empty() {
+            return Ok(());
+        }
+        if let Some(cuda) = &self.cuda {
+            let energies = cuda.fold(jobs)?;
+            self.pairs
+                .extend(jobs.iter().map(|job| job.pair).zip(energies));
+            return Ok(());
+        }
         let params = &self.params;
         let fold = |job: &Job<'_>| {
             (

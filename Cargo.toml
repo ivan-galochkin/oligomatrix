@@ -1,6 +1,6 @@
 [package]
 name = "oligomatrix"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Parallel minimum-free-energy matrices for pairs of nucleotide fragments"
@@ -11,9 +11,14 @@ include = ["/src/**", "/data/*.par", "/Cargo.lock", "/pyproject.toml", "/README.
 crate-type = ["rlib", "cdylib"]
 
 [features]
+default = ["cuda"]
+cuda = ["dep:cudarc"]
 python = ["dep:pyo3", "dep:numpy"]
 
 [dependencies]
 rayon = "1.11"
 numpy = { version = "0.27", optional = true }
 pyo3 = { version = "0.27", optional = true, features = ["abi3-py310", "generate-import-lib"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+cudarc = { version = "0.19.10", optional = true, default-features = false, features = ["std", "driver", "nvrtc", "dynamic-loading", "cuda-12000"] }

@@ -15,6 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - run: cargo fmt --check
+      - run: python3 scripts/build_cuda.py --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: rustup toolchain install 1.88.0 --profile minimal
       - run: cargo +1.88.0 test --locked
@@ -49,6 +50,20 @@ jobs:
           python -m pip install dist/*.whl "ViennaRNA==2.8.0" "twine>=6,<8"
           python -m twine check --strict dist/*.whl
           python scripts/check_matrix.py
+      - name: Verify CPU operation and explicit CUDA error without a visible GPU
+        env:
+          CUDA_VISIBLE_DEVICES: '-1'
+        run: |
+          python - <<'PY'
+          from oligomatrix import energy_matrix
+          assert energy_matrix(["A"], ["T"], backend="cpu").item() == 0
+          try:
+              energy_matrix(["A"], ["T"], backend="cuda")
+          except RuntimeError as error:
+              assert "CUDA" in str(error), error
+          else:
+              raise AssertionError("CUDA call unexpectedly succeeded without a visible device")
+          PY
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.10'

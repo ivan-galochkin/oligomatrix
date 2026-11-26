@@ -12,16 +12,43 @@ print(matrix)  # [[0., 0., -0.6], [0., 0., 0.]]
 
 Для одного вызова есть `energy_matrix(rows, columns, **settings)`. Результат — независимый двумерный массив NumPy типа `float32` в исходном порядке. Калькулятор сохраняет энергии упорядоченных пар между вызовами. Rayon распределяет новые пары между потоками. Значение `threads=0` выбирает до восьми доступных логических процессоров.
 
+## Расчёт на GPU
+
+```python
+from oligomatrix import energy_matrix
+
+matrix = energy_matrix(rows, columns, model="mathews2004", backend="cuda")
+```
+
+`backend="cuda"` доступен и в `EnergyCalculator`. Один блок CUDA считает одну пару. Его потоки заполняют таблицу по диагоналям, начиная с коротких участков. Блоки для разных пар выполняются независимо. Rust готовит энергетические параметры, по одному разу считает энергию свободной цепи для каждого уникального фрагмента правой оси и собирает результат в NumPy. Параметр `threads` задаёт число потоков CPU при `backend="cpu"`.
+
+CUDA поддерживает пары суммарной длиной до 128 нуклеотидов. Для более длинных пар выберите `backend="cpu"`. В wheel для Windows и Linux включено скомпилированное ядро PTX. Нужна видеокарта NVIDIA с compute capability 7.5 или выше и драйвер с поддержкой CUDA 12.9 или новее. Библиотека использует первое видимое устройство. При явно выбранном CUDA ошибки загрузки или выполнения возвращаются в Python. По умолчанию библиотека считает на CPU.
+
+Для проверки на машине с GPU выполните `python scripts/check_cuda.py --benchmark --repeats 3`. Скрипт сверяет результат с ViennaRNA 2.8.0, отдельно показывает первый вызов CUDA и измеряет время до возврата NumPy-массива с пустым кешем пар для каждого повтора.
+
+На RTX 5060 Ti и AMD Ryzen 7 255 матрица 128 × 193 содержала 24 704 разные пары фрагментов длиной 16–36 нуклеотидов каждый. Для модели Mathews 2004 при 37 °C получены следующие медианы пяти повторов, включая возврат результата в Python.
+
+| Режим | Время |
+| --- | ---: |
+| Rust, 1 поток CPU | 4,110 с |
+| Rust, 8 потоков CPU | 0,604 с |
+| CUDA, RTX 5060 Ti | 0,132 с |
+
+Первый вызов CUDA в процессе занял 0,348 с. После инициализации ускорение относительно восьми потоков составило 4,59 раза. При поиске внутренних петель ядро использует нижнюю границу энергии и пропускает варианты, которые уже не могут улучшить найденный минимум. Во всех замерах значения всех ячеек в точности совпали с Python-вызовом `mfe_dimer()`.
+
+После изменения исходников CUDA пересоберите PTX. Для разработчика сборка использует пакеты `cuda-bindings>=12.9,<13` и `nvidia-cuda-nvrtc-cu12==12.9.86`, а также доступную загрузчику библиотеку NVRTC. Выполните `python scripts/build_cuda.py` и включите обновлённый `src/cuda/fold.ptx` в то же изменение. Команда `python scripts/build_cuda.py --check` проверяет соответствие исходников и настроек сборки сохранённой контрольной сумме.
+
 ## Устройство проекта
 
 | Файл | Ответственность |
 | --- | --- |
 | `src/params.rs`, `data/*.par` | Таблицы Turner и Mathews, пересчёт для температуры |
 | `src/folding.rs` | Динамическое программирование для одной и двух цепей |
+| `src/cuda/` | Расчёт по диагоналям на GPU, запуск ядра из Rust и передача результатов |
 | `src/matrix.rs`, `src/workers.rs` | Индексация фрагментов, кеш, сборка матрицы и пул потоков |
 | `src/python.rs` | Python-классы, исключения, освобождение GIL и передача буфера в NumPy |
 
-По умолчанию Cargo собирает ядро без Python. Публичный Rust API состоит из `MatrixCalculator`, `Model`, `EnergyMatrix` и `MatrixError`. Maturin включает адаптер Python при сборке пакета.
+По умолчанию Cargo собирает ядро без Python. В Rust используйте `MatrixCalculator::new` для CPU или `MatrixCalculator::with_backend(temperature, model, threads, Backend::Cuda)` для GPU. Сборка `cargo build --no-default-features` включает только CPU. Maturin включает адаптер Python при сборке пакета.
 
 ## Локальная сборка и проверка
 
@@ -59,6 +86,6 @@ git push -u origin main
 | `pypi` | Настройте Trusted Publisher на PyPI с теми же данными и окружением `pypi`. Для первого выпуска нового проекта можно создать pending publisher. Авторизация выполняется по OIDC. |
 | `private-index` | В GitHub environment `private-index` задайте переменную `PACKAGE_REPOSITORY_URL` с HTTPS-адресом **для загрузки** и секреты `TWINE_USERNAME`, `TWINE_PASSWORD`. Для токена используйте имя пользователя, требуемое вашим реестром. Поддерживается протокол загрузки Twine. |
 
-Через GitHub CLI тот же ручной выпуск можно запустить командой `gh workflow run release.yml --ref main -f registry=testpypi`. Для установки сборки из TestPyPI сначала установите NumPy из обычного индекса, затем выполните `python -m pip install --index-url https://test.pypi.org/simple/ --no-deps oligomatrix==0.3.0`.
+Через GitHub CLI тот же ручной выпуск можно запустить командой `gh workflow run release.yml --ref main -f registry=testpypi`. Для установки сборки из TestPyPI сначала установите NumPy из обычного индекса, затем выполните `python -m pip install --index-url https://test.pypi.org/simple/ --no-deps oligomatrix==0.4.0`.
 
 Правила идентификации репозитория и окружения описаны в [инструкции PyPI по Trusted Publishing](https://docs.pypi.org/trusted-publishers/using-a-publisher/).

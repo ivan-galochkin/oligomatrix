@@ -249,6 +249,92 @@ impl Params {
         }
     }
 
+    /// Packed i32 array read by the Energy view in cuda/energy.cuh. Compute
+    /// logarithmic loop extrapolations here so the GPU gets the same integers
+    /// as the CPU, including the temperature-dependent truncation.
+    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    pub(crate) fn cuda_tables(&self) -> Vec<i32> {
+        const MAX_SIZE: usize = 128;
+        let mut data = vec![
+            self.ml_closing,
+            self.ml_base,
+            self.duplex_init,
+            self.terminal_au,
+            self.ninio,
+            self.max_ninio,
+            self.motifs.len() as i32,
+        ];
+        data.extend_from_slice(self.stack.as_flattened());
+        for costs in [&self.hairpin, &self.bulge, &self.internal_loop] {
+            data.extend((0..=MAX_SIZE).map(|size| self.loop_cost(costs, size)));
+        }
+        for entries in [
+            &self.mismatch_h,
+            &self.mismatch_i,
+            &self.mismatch_1n,
+            &self.mismatch_23,
+            &self.exterior_stem,
+            &self.ml_stem,
+        ] {
+            data.extend_from_slice(entries.as_flattened().as_flattened());
+        }
+        data.extend_from_slice(self.int11.as_flattened());
+        data.extend_from_slice(self.int21.as_flattened());
+        data.extend_from_slice(self.int22.as_flattened());
+        data.extend(self.cuda_internal_bounds(&data));
+        for (seq, energy) in &self.motifs {
+            // The leading bit distinguishes motifs of different lengths.
+            let key = seq.iter().fold(1, |key, &b| (key << 2) | i32::from(b - 1));
+            data.extend([key, *energy]);
+        }
+        data
+    }
+
+    /// Lower bound on the local energy of an internal loop, by total number
+    /// of unpaired bases. Each pair and flank may independently take the most
+    /// favorable entry of its table, including entries unused by the fold.
+    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
+    fn cuda_internal_bounds(&self, packed: &[i32]) -> [i32; 31] {
+        // An extreme temperature can make an i32 energy wrap. Disable
+        // pruning unless the products (at most 30 * NINIO), sums of local
+        // terms, and addition of a feasible inner energy (< INF) are all
+        // bounded above by i32::MAX. The caller widens the lower-bound sum.
+        if packed.iter().any(|v| !(-INF..=INF).contains(v)) {
+            return [i32::MIN; 31];
+        }
+        let minimum = |values: &[i32]| *values.iter().min().unwrap();
+        let stack = minimum(self.stack.as_flattened());
+        let int11 = minimum(self.int11.as_flattened());
+        let int21 = minimum(self.int21.as_flattened());
+        let int22 = minimum(self.int22.as_flattened());
+        let mismatch_i = minimum(self.mismatch_i.as_flattened().as_flattened());
+        let mismatch_1n = minimum(self.mismatch_1n.as_flattened().as_flattened());
+        let mismatch_23 = minimum(self.mismatch_23.as_flattened().as_flattened());
+
+        std::array::from_fn(|size| {
+            let bulge = match size {
+                0 => return stack,
+                1 => return self.bulge[1] + stack,
+                _ => self.bulge[size] + 2 * self.terminal_au.min(0),
+            };
+            (1..=size / 2).fold(bulge, |best, small| {
+                let large = size - small;
+                let local = match (small, large) {
+                    (1, 1) => int11,
+                    (1, 2) => int21,
+                    (2, 2) => int22,
+                    (2, 3) => self.internal_loop[size] + self.ninio + 2 * mismatch_23,
+                    _ => {
+                        let asymmetry = (self.ninio * (large - small) as i32).min(self.max_ninio);
+                        let mismatch = if small == 1 { mismatch_1n } else { mismatch_i };
+                        self.internal_loop[size] + asymmetry + 2 * mismatch
+                    }
+                };
+                best.min(local)
+            })
+        })
+    }
+
     pub(crate) fn hairpin(&self, pair: u8, sequence: &[u8]) -> i32 {
         let size = sequence.len() - 2;
         let cost = self.loop_cost(&self.hairpin, size);
@@ -330,5 +416,54 @@ impl Params {
             + asymmetry
             + mismatch[p][si][sj]
             + mismatch[q][sq][sp]
+    }
+}
+
+#[cfg(all(
+    test,
+    feature = "cuda",
+    any(target_os = "linux", target_os = "windows")
+))]
+mod cuda_tests {
+    use super::Params;
+
+    fn packed_internal_bounds(params: &Params) -> Vec<i32> {
+        let data = params.cuda_tables();
+        let end = data.len() - 2 * params.motifs.len();
+        data[end - 31..end].to_vec()
+    }
+
+    #[test]
+    fn internal_bounds_cover_each_loop_geometry() {
+        for dna in [false, true] {
+            for temperature in [-80.0, 37.0, 92.5] {
+                let params = Params::new(temperature, dna);
+                let bounds = packed_internal_bounds(&params);
+                for (size, bound) in bounds.into_iter().enumerate() {
+                    assert_ne!(bound, i32::MIN);
+                    for n1 in 0..=size {
+                        let n2 = size - n1;
+                        for outer in 1..=6 {
+                            for inner in 1..=6 {
+                                for code in 0..256 {
+                                    let [si, sj, sp, sq] =
+                                        [0, 2, 4, 6].map(|shift| ((code >> shift) & 3) as u8 + 1);
+                                    let local =
+                                        params.internal(n1, n2, outer, inner, si, sj, sp, sq);
+                                    assert!(bound <= local, "{bound} > {local} for {n1}x{n2}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unbounded_energy_components_disable_cuda_pruning() {
+        let mut params = Params::new(37.0, false);
+        params.ninio = i32::MAX;
+        assert_eq!(packed_internal_bounds(&params), [i32::MIN; 31]);
     }
 }

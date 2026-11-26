@@ -3,3 +3,6 @@
 *.rs text eol=lf
 *.yml text eol=lf
 *.py text eol=lf
+*.cu text eol=lf
+*.cuh text eol=lf
+*.ptx text eol=lf
