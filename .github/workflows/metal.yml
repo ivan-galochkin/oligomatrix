@@ -24,3 +24,15 @@ jobs:
           let source = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
           let library = try gpu.makeLibrary(source: source, options: nil)
           _ = try gpu.makeComputePipelineState(function: library.makeFunction(name: "fold")!)' "$RUNNER_TEMP/fold.metal"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.12'
+      - name: Build and install the Apple Silicon wheel
+        run: |
+          python -m pip install "maturin==1.16.0" "ViennaRNA==2.8.0" numpy
+          maturin build --release --locked --out dist
+          python -m pip install dist/*.whl
+      - name: Compare Metal with ViennaRNA
+        run: python scripts/check_cuda.py --backend metal
+      - name: Benchmark independent oligo sets
+        run: python scripts/benchmark_apple.py

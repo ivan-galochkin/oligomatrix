@@ -1,5 +1,3 @@
-pub(crate) const MAX_BASES: usize = 128;
-
 #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
 mod driver;
 #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]

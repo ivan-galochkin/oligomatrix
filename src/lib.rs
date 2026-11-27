@@ -2,7 +2,10 @@
 mod cuda;
 mod error;
 mod folding;
+mod gpu;
 mod matrix;
+#[cfg(all(feature = "metal", target_os = "macos", target_arch = "aarch64"))]
+mod metal;
 mod params;
 #[cfg(feature = "python")]
 mod python;

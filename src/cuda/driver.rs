@@ -69,7 +69,7 @@ impl CudaFold {
     pub(crate) fn new(params: &Params) -> Result<Self, MatrixError> {
         let kernel = Kernel::shared()?;
         let stream = kernel.context.new_stream()?;
-        let tables = stream.clone_htod(&params.cuda_tables())?;
+        let tables = stream.clone_htod(&params.gpu_tables())?;
         Ok(Self {
             function: kernel.function,
             stream,
@@ -78,34 +78,13 @@ impl CudaFold {
     }
 
     pub(crate) fn fold(&self, jobs: &[Job<'_>]) -> Result<Vec<f32>, MatrixError> {
-        let capacity = jobs
+        let (capacity, seqs) = crate::gpu::pack_sequences(jobs);
+        let cuts: Vec<_> = jobs.iter().map(|j| j.row.len() as i32).collect();
+        let lengths: Vec<_> = jobs
             .iter()
-            .map(|job| job.row.len() + job.column.len())
-            .max()
-            .unwrap();
-        debug_assert!(capacity <= super::MAX_BASES);
-        let stride = capacity + 2;
-        let mut seqs = vec![0u8; jobs.len() * stride];
-        let mut cuts = Vec::with_capacity(jobs.len());
-        let mut lengths = Vec::with_capacity(jobs.len());
-        let mut monomers = Vec::with_capacity(jobs.len());
-        for (job, seq) in jobs.iter().zip(seqs.chunks_exact_mut(stride)) {
-            let n = job.row.len() + job.column.len();
-            for (base, target) in job.row.iter().chain(job.column).zip(&mut seq[1..=n]) {
-                *target = match base {
-                    b'A' => 1,
-                    b'C' => 2,
-                    b'G' => 3,
-                    b'T' => 4,
-                    _ => unreachable!("validated nucleotide"),
-                };
-            }
-            seq[0] = seq[n];
-            seq[n + 1] = seq[1];
-            cuts.push(job.row.len() as i32);
-            lengths.push(n as i32);
-            monomers.push(job.column_energy);
-        }
+            .map(|j| (j.row.len() + j.column.len()) as i32)
+            .collect();
+        let monomers: Vec<_> = jobs.iter().map(|j| j.column_energy).collect();
         let stream = &self.stream;
         let seqs = stream.clone_htod(&seqs)?;
         let cuts = stream.clone_htod(&cuts)?;

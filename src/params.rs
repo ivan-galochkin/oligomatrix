@@ -249,12 +249,15 @@ impl Params {
         }
     }
 
-    /// Packed i32 array read by the Energy view in cuda/energy.cuh. Compute
+    /// Packed i32 array read by the Energy view in gpu/energy.h. Compute
     /// logarithmic loop extrapolations here so the GPU gets the same integers
     /// as the CPU, including the temperature-dependent truncation.
-    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
-    pub(crate) fn cuda_tables(&self) -> Vec<i32> {
-        const MAX_SIZE: usize = 128;
+    #[cfg(any(
+        all(feature = "cuda", any(target_os = "linux", target_os = "windows")),
+        all(feature = "metal", target_os = "macos", target_arch = "aarch64")
+    ))]
+    pub(crate) fn gpu_tables(&self) -> Vec<i32> {
+        use crate::gpu::MAX_BASES;
         let mut data = vec![
             self.ml_closing,
             self.ml_base,
@@ -266,7 +269,7 @@ impl Params {
         ];
         data.extend_from_slice(self.stack.as_flattened());
         for costs in [&self.hairpin, &self.bulge, &self.internal_loop] {
-            data.extend((0..=MAX_SIZE).map(|size| self.loop_cost(costs, size)));
+            data.extend((0..=MAX_BASES).map(|size| self.loop_cost(costs, size)));
         }
         for entries in [
             &self.mismatch_h,
@@ -281,7 +284,7 @@ impl Params {
         data.extend_from_slice(self.int11.as_flattened());
         data.extend_from_slice(self.int21.as_flattened());
         data.extend_from_slice(self.int22.as_flattened());
-        data.extend(self.cuda_internal_bounds(&data));
+        data.extend(self.gpu_internal_bounds(&data));
         for (seq, energy) in &self.motifs {
             // The leading bit distinguishes motifs of different lengths.
             let key = seq.iter().fold(1, |key, &b| (key << 2) | i32::from(b - 1));
@@ -293,8 +296,11 @@ impl Params {
     /// Lower bound on the local energy of an internal loop, by total number
     /// of unpaired bases. Each pair and flank may independently take the most
     /// favorable entry of its table, including entries unused by the fold.
-    #[cfg(all(feature = "cuda", any(target_os = "linux", target_os = "windows")))]
-    fn cuda_internal_bounds(&self, packed: &[i32]) -> [i32; 31] {
+    #[cfg(any(
+        all(feature = "cuda", any(target_os = "linux", target_os = "windows")),
+        all(feature = "metal", target_os = "macos", target_arch = "aarch64")
+    ))]
+    fn gpu_internal_bounds(&self, packed: &[i32]) -> [i32; 31] {
         // An extreme temperature can make an i32 energy wrap. Disable
         // pruning unless the products (at most 30 * NINIO), sums of local
         // terms, and addition of a feasible inner energy (< INF) are all
@@ -421,14 +427,16 @@ impl Params {
 
 #[cfg(all(
     test,
-    feature = "cuda",
-    any(target_os = "linux", target_os = "windows")
+    any(
+        all(feature = "cuda", any(target_os = "linux", target_os = "windows")),
+        all(feature = "metal", target_os = "macos", target_arch = "aarch64")
+    )
 ))]
 mod cuda_tests {
     use super::Params;
 
     fn packed_internal_bounds(params: &Params) -> Vec<i32> {
-        let data = params.cuda_tables();
+        let data = params.gpu_tables();
         let end = data.len() - 2 * params.motifs.len();
         data[end - 31..end].to_vec()
     }

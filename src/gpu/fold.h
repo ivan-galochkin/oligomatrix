@@ -1,6 +1,13 @@
 namespace {
-constexpr int max_length = 128;
-constexpr int infinity = 10000000;
+enum : int { max_length = 128, infinity = 10000000 };
+
+GPU_FN bool cannot_improve(int stem, int lower, int best) {
+#ifdef __METAL_VERSION__
+    return add_sat(stem, lower) >= best;
+#else
+    return (long long)stem + lower >= best;
+#endif
+}
 
 // Three-bit pair types for partners A, C, G, T, in that order.
 GPU_CONSTANT unsigned short pair_rows[] = {
@@ -23,7 +30,7 @@ struct FoldState {
         return min_closed[d];
 #endif
     }
-     
+
     int split[3][max_length + 2];    // Closing a multiloop reads diagonal d-2.
     int suffix[max_length + 2];     // Exterior fragments ending at the nick.
     int second[max_length + 2];     // Exterior prefixes of the second strand.
@@ -59,14 +66,14 @@ struct FoldState {
             // Every candidate on this diagonal costs at least its cheapest
             // stem plus the cheapest loop with u unpaired bases. The host
             // disables this bound for tables that can overflow local energy.
-            if (bounded && (long long)diagonal_min(inner_d) + lower >= best)
+            if (bounded && cannot_improve(diagonal_min(inner_d), lower, best))
                 continue;
             int first = crosses ? max(0, cut + 2 + u - j) : 0;
             int last = crosses ? min(u, cut - i - 1) : u;
             GPU_DP const int *diagonal = closed + offset[inner_d] + i;
             for (int a = first; a <= last; ++a) {
                 int inner_energy = diagonal[a];
-                if (inner_energy < infinity && (!bounded || (long long)inner_energy + lower < best)) {
+                if (inner_energy < infinity && (!bounded || !cannot_improve(inner_energy, lower, best))) {
                     int k = i + 1 + a;
                     int l = j - 1 - (u - a);
                     int local = e.internal(a, u - a, type, pair(l, k),

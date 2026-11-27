@@ -9,7 +9,7 @@ kernel void fold(device const int *params [[buffer(0)]],
                  constant int &capacity [[buffer(5)]],
                  uint job [[threadgroup_position_in_grid]],
                  uint lane [[thread_index_in_threadgroup]],
-                 uint3 group_size [[threads_per_threadgroup]]) {
+                 uint group_size [[threads_per_threadgroup]]) {
     int cut = sizes[job].x;
     int n = sizes[job].y;
     if (n == 2) {
@@ -20,6 +20,6 @@ kernel void fold(device const int *params [[buffer(0)]],
     uint triangle = capacity * (capacity + 1) / 2;
     device int *closed = scratch + job * 2 * triangle;
     fill_pair(params, sequences + job * (capacity + 2), n, cut, state,
-              closed, closed + triangle, int(lane), int(group_size.x));
+              closed, closed + triangle, int(lane), int(group_size));
     if (lane == 0) energies[job] = int2(state.whole[n], state.whole[cut]);
 }

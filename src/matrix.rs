@@ -4,13 +4,12 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use crate::cuda::CudaFold;
+use crate::gpu::{GpuFold, MAX_BASES};
 use crate::params::Params;
 use crate::workers::Workers;
 use crate::{MatrixError, Model, folding};
 
 const BATCH_SIZE: usize = 512;
-const CUDA_BATCH_SIZE: usize = 2048;
 const MAX_PAIR_LENGTH: usize = 32_700;
 type Pair = (usize, usize);
 
@@ -18,6 +17,7 @@ type Pair = (usize, usize);
 pub enum Backend {
     Cpu,
     Cuda,
+    Metal,
 }
 
 impl FromStr for Backend {
@@ -27,8 +27,9 @@ impl FromStr for Backend {
         match value {
             "cpu" => Ok(Self::Cpu),
             "cuda" => Ok(Self::Cuda),
+            "metal" => Ok(Self::Metal),
             _ => Err(MatrixError::InvalidInput(
-                "Expected backend='cpu' or 'cuda'",
+                "Expected backend='cpu', 'cuda' or 'metal'",
             )),
         }
     }
@@ -93,7 +94,7 @@ pub(crate) struct Job<'a> {
 pub struct MatrixCalculator {
     params: Arc<Params>,
     workers: Workers,
-    cuda: Option<CudaFold>,
+    gpu: Option<GpuFold>,
     ids: HashMap<String, usize>,
     monomers: HashMap<usize, f32>,
     pairs: HashMap<Pair, f32>,
@@ -112,13 +113,10 @@ impl MatrixCalculator {
         backend: Backend,
     ) -> Result<Self, MatrixError> {
         let params = Params::shared(model, temperature)?;
-        let cuda = match backend {
-            Backend::Cpu => None,
-            Backend::Cuda => Some(CudaFold::new(&params)?),
-        };
+        let gpu = GpuFold::new(backend, &params)?;
         Ok(Self {
             params,
-            cuda,
+            gpu,
             workers: Workers::new(threads),
             ids: HashMap::new(),
             monomers: HashMap::new(),
@@ -149,9 +147,9 @@ impl MatrixCalculator {
                 "Combined fragment length exceeds 32700",
             ));
         }
-        if self.cuda.is_some() && longest_row + longest_column > crate::cuda::MAX_BASES {
+        if self.gpu.is_some() && longest_row + longest_column > MAX_BASES {
             return Err(MatrixError::InvalidInput(
-                "CUDA supports a combined fragment length up to 128; use backend='cpu' for longer pairs",
+                "GPU backends support a combined fragment length up to 128; use backend='cpu' for longer pairs",
             ));
         }
         let mut values = Vec::new();
@@ -180,11 +178,7 @@ impl MatrixCalculator {
             })
             .collect();
         let mut jobs = Vec::new();
-        let batch_size = if self.cuda.is_some() {
-            CUDA_BATCH_SIZE
-        } else {
-            BATCH_SIZE
-        };
+        let batch_size = self.gpu.as_ref().map_or(BATCH_SIZE, GpuFold::batch_size);
         for &(i, row) in &rows.unique {
             for &(j, column, column_energy) in &columns {
                 if !self.pairs.contains_key(&(i, j)) {
@@ -208,8 +202,8 @@ impl MatrixCalculator {
         if jobs.is_empty() {
             return Ok(());
         }
-        if let Some(cuda) = &self.cuda {
-            let energies = cuda.fold(jobs)?;
+        if let Some(gpu) = &self.gpu {
+            let energies = gpu.fold(jobs)?;
             self.pairs
                 .extend(jobs.iter().map(|job| job.pair).zip(energies));
             return Ok(());

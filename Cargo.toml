@@ -1,6 +1,6 @@
 [package]
 name = "oligomatrix"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Parallel minimum-free-energy matrices for pairs of nucleotide fragments"
@@ -11,7 +11,8 @@ include = ["/src/**", "/data/*.par", "/Cargo.lock", "/pyproject.toml", "/README.
 crate-type = ["rlib", "cdylib"]
 
 [features]
-default = ["cuda"]
+default = ["cuda", "metal"]
+metal = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-metal"]
 cuda = ["dep:cudarc"]
 python = ["dep:pyo3", "dep:numpy"]
 
@@ -22,3 +23,8 @@ pyo3 = { version = "0.27", optional = true, features = ["abi3-py310", "generate-
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 cudarc = { version = "0.19.10", optional = true, default-features = false, features = ["std", "driver", "nvrtc", "dynamic-loading", "cuda-12000"] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError"], optional = true }
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLBuffer", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLComputeCommandEncoder", "MTLComputePipeline", "MTLDevice", "MTLLibrary", "MTLResource", "MTLTypes"], optional = true }
