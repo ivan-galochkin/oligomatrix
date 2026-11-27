@@ -20,6 +20,14 @@ const SOURCE: &str = concat!(
 type Object<T> = Retained<ProtocolObject<T>>;
 type Buffer = Object<dyn MTLBuffer>;
 
+// Uploaded before publication and bound only as a const input to the kernel.
+// No CPU or GPU writer can access this allocation after construction.
+struct EnergyTables(Buffer);
+// SAFETY: Metal resource ownership is thread-safe, and this wrapper never
+// exposes the buffer's CPU pointer or binds it for writes.
+unsafe impl Send for EnergyTables {}
+unsafe impl Sync for EnergyTables {}
+
 #[derive(Clone)]
 struct Kernel {
     device: Object<dyn MTLDevice>,
@@ -76,7 +84,7 @@ impl Kernel {
 pub(crate) struct MetalFold {
     kernel: Kernel,
     queue: Object<dyn MTLCommandQueue>,
-    tables: Buffer,
+    tables: EnergyTables,
 }
 
 impl MetalFold {
@@ -86,7 +94,7 @@ impl MetalFold {
             let queue = kernel.device.newCommandQueue().ok_or_else(|| {
                 MatrixError::Runtime("Metal command queue creation failed".into())
             })?;
-            let tables = kernel.upload(&params.gpu_tables())?;
+            let tables = EnergyTables(kernel.upload(&params.gpu_tables())?);
             Ok(Self {
                 kernel,
                 queue,
@@ -127,7 +135,7 @@ impl MetalFold {
         // SAFETY: all bindings match fold.metal, remain alive through completion,
         // and setBytes copies the scalar before returning.
         unsafe {
-            for (i, buffer) in [&self.tables, &seqs, &sizes, &result, &scratch]
+            for (i, buffer) in [&self.tables.0, &seqs, &sizes, &result, &scratch]
                 .into_iter()
                 .enumerate()
             {
