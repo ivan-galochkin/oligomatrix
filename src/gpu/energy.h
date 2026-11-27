@@ -1,6 +1,28 @@
-// Read-only view of the i32 array produced by Params::cuda_tables.
+// Address spaces are part of the type system in Metal. CUDA uses generic
+// pointers inside device functions.
+#ifdef __METAL_VERSION__
+#include <metal_stdlib>
+using namespace metal;
+#define GPU_INLINE inline
+#define GPU_FN inline
+#define GPU_TABLE device
+#define GPU_GROUP threadgroup
+#define GPU_DP device
+#define GPU_METHOD threadgroup
+#define GPU_CONSTANT constant
+#else
+#define GPU_INLINE __device__ __forceinline__
+#define GPU_FN __device__
+#define GPU_TABLE
+#define GPU_GROUP
+#define GPU_DP
+#define GPU_METHOD
+#define GPU_CONSTANT __device__ __constant__
+#endif
+
+// Read-only view of the i32 array produced by Params::gpu_tables.
 struct Energy {
-    const int *data;
+    GPU_TABLE const int *data;
 
     enum Offset {
         MlClosing, MlBase, DuplexInit, TerminalAu, Ninio, MaxNinio, MotifCount,
@@ -21,34 +43,34 @@ struct Energy {
         Motifs = InternalLowerBounds + 31
     };
 
-    __device__ __forceinline__ int ml_closing() const { return data[MlClosing]; }
-    __device__ __forceinline__ int ml_base() const { return data[MlBase]; }
-    __device__ __forceinline__ int duplex_init() const { return data[DuplexInit]; }
-    __device__ __forceinline__ int internal_lower_bound(int unpaired) const {
+    GPU_INLINE int ml_closing() const { return data[MlClosing]; }
+    GPU_INLINE int ml_base() const { return data[MlBase]; }
+    GPU_INLINE int duplex_init() const { return data[DuplexInit]; }
+    GPU_INLINE int internal_lower_bound(int unpaired) const {
         return data[InternalLowerBounds + unpaired];
     }
 
-    __device__ __forceinline__ int stack(int outer, int inner_rev) const {
+    GPU_INLINE int stack(int outer, int inner_rev) const {
         return data[Stack + (outer - 1) * 7 + inner_rev - 1];
     }
 
-    __device__ __forceinline__ int mismatch(int table, int pair, int left, int right) const {
+    GPU_INLINE int mismatch(int table, int pair, int left, int right) const {
         return data[table + (pair - 1) * 25 + left * 5 + right];
     }
 
-    __device__ __forceinline__ int exterior(int pair, int flank5, int flank3) const {
+    GPU_INLINE int exterior(int pair, int flank5, int flank3) const {
         return mismatch(Exterior, pair, flank5, flank3);
     }
 
-    __device__ __forceinline__ int multibranch(int pair, int flank5, int flank3) const {
+    GPU_INLINE int multibranch(int pair, int flank5, int flank3) const {
         return mismatch(Multibranch, pair, flank5, flank3);
     }
 
-    __device__ __forceinline__ int end_penalty(int pair) const {
+    GPU_INLINE int end_penalty(int pair) const {
         return pair > 2 ? data[TerminalAu] : 0;
     }
 
-    __device__ __forceinline__ int hairpin(int pair, const unsigned char *sequence,
+    GPU_INLINE int hairpin(int pair, GPU_GROUP const unsigned char *sequence,
                                           int length) const {
         const int size = length - 2;
         const int cost = data[Hairpin + size];
@@ -69,7 +91,7 @@ struct Energy {
 
     // si,sj flank the outer pair on the inside. sp,sq flank the inner pair
     // on the outside, and inner_rev describes the pair in reverse order.
-    __device__ __forceinline__ int internal(int n1, int n2, int outer, int inner_rev,
+    GPU_INLINE int internal(int n1, int n2, int outer, int inner_rev,
                                            int si, int sj, int sp, int sq) const {
         const int small = n1 < n2 ? n1 : n2;
         const int large = n1 > n2 ? n1 : n2;

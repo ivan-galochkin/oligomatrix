@@ -10,8 +10,17 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - name: Identify the Metal device
         run: |
           uname -m
           sysctl -n machdep.cpu.brand_string
           swift -e 'import Metal; print("Metal devices:", MTLCopyAllDevices().map { $0.name })'
+      - name: Compile the MSL on the runner GPU
+        run: |
+          cat src/gpu/energy.h src/gpu/fold.h src/metal/fold.metal > "$RUNNER_TEMP/fold.metal"
+          swift -e 'import Foundation; import Metal
+          guard let gpu = MTLCreateSystemDefaultDevice() else { fatalError("No Metal GPU") }
+          let source = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
+          let library = try gpu.makeLibrary(source: source, options: nil)
+          _ = try gpu.makeComputePipelineState(function: library.makeFunction(name: "fold")!)' "$RUNNER_TEMP/fold.metal"
