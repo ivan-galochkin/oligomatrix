@@ -3,7 +3,7 @@ enum : int { max_length = 128, infinity = 10000000 };
 
 GPU_FN bool cannot_improve(int stem, int lower, int best) {
 #ifdef __METAL_VERSION__
-    return add_sat(stem, lower) >= best;
+    return addsat(stem, lower) >= best;
 #else
     return (long long)stem + lower >= best;
 #endif
@@ -143,7 +143,7 @@ GPU_FN void fill_pair(GPU_TABLE const int *params, GPU_TABLE const unsigned char
         if (t < n) {
             state.offset[t] = t * (2 * n - t + 1) / 2;
 #ifdef __METAL_VERSION__
-            atomic_store_explicit(&state.min_closed[t], infinity, memory_order_relaxed);
+            atomic_store_explicit(&state.min_closed[t], int(infinity), memory_order_relaxed);
 #else
             state.min_closed[t] = infinity;
 #endif
