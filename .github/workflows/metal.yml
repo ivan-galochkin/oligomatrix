@@ -1,0 +1,17 @@
+name: Metal validation
+on:
+  push:
+    branches: [feature/apple-metal]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Identify the Metal device
+        run: |
+          uname -m
+          sysctl -n machdep.cpu.brand_string
+          swift -e 'import Metal; print("Metal devices:", MTLCopyAllDevices().map { $0.name })'
