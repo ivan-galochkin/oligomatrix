@@ -139,7 +139,7 @@ def main():
     if RNA.__version__ != "2.8.0":
         raise RuntimeError(f"Expected ViennaRNA 2.8.0, found {RNA.__version__}")
 
-    # Measure the first CUDA use in this process before running the regressions.
+    # Measure the first GPU use in this process before running the regressions.
     if args.benchmark:
         benchmark(args.repeats, args.backend)
     check_edges(args.backend)

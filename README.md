@@ -38,17 +38,40 @@ CUDA поддерживает пары суммарной длиной до 128 
 
 После изменения исходников CUDA пересоберите PTX. Для разработчика сборка использует пакеты `cuda-bindings>=12.9,<13` и `nvidia-cuda-nvrtc-cu12==12.9.86`, а также доступную загрузчику библиотеку NVRTC. Выполните `python scripts/build_cuda.py` и включите обновлённый `src/cuda/fold.ptx` в то же изменение. Команда `python scripts/build_cuda.py --check` проверяет соответствие исходников и настроек сборки сохранённой контрольной сумме.
 
+## Apple Silicon и Metal
+
+На Mac с процессором Apple и нативным Python для arm64 выберите `backend="metal"`. Один вызов возвращает обычную матрицу NumPy. Например, для списка из 20 фрагментов ДНК:
+
+```python
+from oligomatrix import EnergyCalculator
+
+calc = EnergyCalculator(backend="metal", model="mathews2004", temperature=65.0)
+matrix = calc.matrix(oligos, oligos)  # (20, 20), numpy.float32
+```
+
+Каждая группа потоков GPU обрабатывает одну упорядоченную пару. Потоки параллельно заполняют ячейки одной диагонали и синхронизируются перед переходом к следующей. Разные пары могут выполняться одновременно. Metal и CUDA используют один исходный код для энергетических формул и рекуррентных соотношений. Суммарная длина двух фрагментов ограничена 128 нуклеотидами. Если устройство Metal недоступно, Python получает исключение.
+
+В GitHub Actions откройте **Metal validation → Run workflow**. Задание на macOS arm64 собирает wheel, проверяет его через Python и сохраняет wheel и протокол замера в артефакте `oligomatrix-metal-macos-arm64`. Для повтора на своём Mac из репозитория с установленным wheel и `ViennaRNA==2.8.0` выполните:
+
+```sh
+python scripts/check_cuda.py --backend metal
+python scripts/benchmark_apple.py
+```
+
+Бенчмарк рассчитывает 1 000 разных наборов по 20 олигов длиной 40–60 нуклеотидов. В каждом наборе исходная цепь имеет длину 600 нуклеотидов, перекрытия соседних олигов — 20–30. Модель — DNA Mathews 2004 при 65 °C. Время включает создание калькулятора и получение всех 1 000 матриц в Python. Для сверки всех 400 000 значений скрипт использует SHA-256 массива `float32` с заданным порядком байтов. Эталон рассчитан вызовом `RNA.fold_compound(...).mfe_dimer()` для каждой ячейки. Его можно воспроизвести командой `python scripts/benchmark_apple.py --oracle-workers 8`.
+
 ## Устройство проекта
 
 | Файл | Ответственность |
 | --- | --- |
 | `src/params.rs`, `data/*.par` | Таблицы Turner и Mathews, пересчёт для температуры |
 | `src/folding.rs` | Динамическое программирование для одной и двух цепей |
-| `src/cuda/` | Расчёт по диагоналям на GPU, запуск ядра из Rust и передача результатов |
+| `src/gpu/` | Общие для GPU энергетические формулы, расчёт по диагоналям и упаковка входных данных |
+| `src/cuda/`, `src/metal/` | Запуск ядра на NVIDIA или Apple GPU и передача результатов в Rust |
 | `src/matrix.rs`, `src/workers.rs` | Индексация фрагментов, кеш, сборка матрицы и пул потоков |
 | `src/python.rs` | Python-классы, исключения, освобождение GIL и передача буфера в NumPy |
 
-По умолчанию Cargo собирает ядро без Python. В Rust используйте `MatrixCalculator::new` для CPU или `MatrixCalculator::with_backend(temperature, model, threads, Backend::Cuda)` для GPU. Сборка `cargo build --no-default-features` включает только CPU. Maturin включает адаптер Python при сборке пакета.
+По умолчанию Cargo собирает ядро без Python. В Rust используйте `MatrixCalculator::new` для CPU или `MatrixCalculator::with_backend` с `Backend::Cuda` или `Backend::Metal` для GPU. Сборка `cargo build --no-default-features` включает только CPU. Maturin включает адаптер Python при сборке пакета.
 
 ## Локальная сборка и проверка
 
